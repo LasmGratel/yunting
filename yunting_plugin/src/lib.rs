@@ -109,10 +109,11 @@ unsafe extern "system" fn scs_telemetry_init(version: i32, params: *const scs_te
     0
 }
 
-async fn plugin_main(_params: ScsSdkInitParamsV100) {
+async fn plugin_main(params: ScsSdkInitParamsV100) {
     let live_streams_path = if let Some(home_dir) = std::env::home_dir() {
         let documents = home_dir.join("Documents"); // TODO: use Windows API [Environment]::GetFolderPath('Personal')
-        let game_dir = documents.join("Euro Truck Simulator 2");
+        let game_name = if params.game_id == "eut2" { "Euro Truck Simulator 2" } else if params.game_id == "ats" { "American Truck Simulator" } else { &params.game_name };
+        let game_dir = documents.join(game_name);
         if !game_dir.is_dir() {
             log::warn!("Game directory does not exist: {:?}", game_dir);
             return;
