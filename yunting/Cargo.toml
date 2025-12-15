@@ -1,0 +1,11 @@
+[package]
+name = "yunting"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = { version = "1.48", features = ["full"] }
+log = "0.4"
+clap = "4.5"
+yunting_lib = { path = "../yunting_lib" }
+env_logger = "0.11"
