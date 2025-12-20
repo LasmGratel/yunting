@@ -1,3 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["yunting", "yunting_lib", "yunting_plugin"]
+
+[profile.release-lto]
+inherits = "release"
+lto = true
+strip = true

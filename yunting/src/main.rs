@@ -1,29 +1,44 @@
-use std::fmt::Result;
-
 use tokio::{fs::File, io::AsyncWriteExt};
-use yunting_lib::{list_all_provinces, get_radio_list, format_live_streams};
+use yunting_lib::{config::load_config, format_live_streams, get_radio_list, list_all_provinces};
 
 #[tokio::main]
 async fn main() {
     env_logger::init();
-    
-    let provinces = list_all_provinces().await;
-    if provinces.is_err() {
-        panic!("Failed to fetch provinces");
-    }
-    let provinces = provinces.unwrap();
-    if provinces.data.is_none() {
-        panic!("No provinces data found, cause: {:?}", provinces);
-    }
+
+    let provinces = if let Ok(config) = load_config(&std::env::current_dir().unwrap()) {
+        config.provinces
+    } else {
+        let provinces = list_all_provinces().await;
+        if provinces.is_err() {
+            panic!("Failed to fetch provinces");
+        }
+        let provinces = provinces.unwrap();
+        if provinces.data.is_none() {
+            panic!("No province data received: {:?}", provinces);
+        }
+        let province_codes = provinces
+            .data
+            .unwrap()
+            .into_iter()
+            .map(|p| p.province_code)
+            .collect::<Vec<_>>();
+        if let Err(e) = yunting_lib::config::save_config(
+            &std::env::current_dir().unwrap(),
+            province_codes.clone(),
+        ) {
+            panic!("Failed to save config: {:?}", e);
+        }
+        province_codes
+    };
 
     let mut radio_list = vec![];
 
-    for p in provinces.data.unwrap() {
-        let radios = get_radio_list(p.province_code).await;
+    for p in provinces {
+        let radios = get_radio_list(p).await;
         if radios.is_err() {
             log::warn!(
-                "Failed to fetch radio list for province {}: {:?}",
-                p.province_code,
+                "Failed to fetch radio list for province {}, cause: {:?}",
+                p,
                 radios.err()
             );
             continue;
@@ -32,14 +47,13 @@ async fn main() {
         if radios.data.is_none() {
             log::warn!(
                 "No radio list data found for province {}, cause: {:?}",
-                p.province_code,
+                p,
                 radios
             );
             continue;
         }
         radio_list.push(radios.data);
     }
-
 
     let radio_list = radio_list
         .into_iter()

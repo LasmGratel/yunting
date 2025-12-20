@@ -1,20 +1,23 @@
-use std::{cell::RefCell, ffi::{c_char, CStr, CString}, io::Write, str::FromStr, sync::{Arc, LazyLock}};
+use std::{
+    ffi::{CStr, CString, c_char},
+    str::FromStr,
+};
 
-use log::{info, Level, LevelFilter, Log, Metadata, Record};
-use tokio::{fs::File, io::AsyncWriteExt, runtime::{Builder, Runtime}, sync::{mpsc, RwLock}};
-use yunting_lib::{list_all_provinces, get_radio_list, format_live_streams};
+use log::{Level, LevelFilter, Log, Metadata, Record, info};
+use tokio::{fs::File, io::AsyncWriteExt, runtime::Builder};
+use yunting_lib::{format_live_streams, get_radio_list, list_all_provinces};
 
 #[allow(non_camel_case_types)]
 type scs_log_t = extern "C" fn(i32, *const c_char) -> ();
 
-#[allow(non_upper_case_globals)]
+#[allow(non_upper_case_globals, unused)]
 const SCS_LOG_TYPE_message: i32 = 0;
 
-#[allow(non_upper_case_globals)]
+#[allow(non_upper_case_globals, unused)]
 const SCS_LOG_TYPE_warning: i32 = 1;
 
-#[allow(non_upper_case_globals)]
-const SCS_LOG_TYPE_error  : i32 = 2;
+#[allow(non_upper_case_globals, unused)]
+const SCS_LOG_TYPE_error: i32 = 2;
 
 #[repr(C)]
 #[allow(non_camel_case_types)]
@@ -30,7 +33,7 @@ struct scs_sdk_init_params_v100_t {
 }
 
 struct ScsLogger {
-    logger: scs_log_t
+    logger: scs_log_t,
 }
 
 unsafe impl Send for ScsLogger {}
@@ -51,8 +54,16 @@ impl Log for ScsLogger {
             //         return;
             //     }
             // };
-            let msg = format!("[{}] [{}] {}", record.target(), record.level(), record.args());
-            (self.logger)(SCS_LOG_TYPE_message, CString::from_str(&msg).unwrap().as_ptr());
+            let msg = format!(
+                "[{}] [{}] {}",
+                record.target(),
+                record.level(),
+                record.args()
+            );
+            (self.logger)(
+                SCS_LOG_TYPE_message,
+                CString::from_str(&msg).unwrap().as_ptr(),
+            );
         }
     }
 
@@ -71,9 +82,11 @@ impl From<&scs_sdk_init_params_v100_t> for ScsSdkInitParamsV100 {
     fn from(value: &scs_sdk_init_params_v100_t) -> Self {
         unsafe {
             ScsSdkInitParamsV100 {
-                game_name: CStr::from_ptr(value.game_name).to_string_lossy().to_string(),
+                game_name: CStr::from_ptr(value.game_name)
+                    .to_string_lossy()
+                    .to_string(),
                 game_id: CStr::from_ptr(value.game_id).to_string_lossy().to_string(),
-                game_version: value.game_version
+                game_version: value.game_version,
             }
         }
     }
@@ -87,13 +100,17 @@ struct scs_telemetry_init_params_v100_t {
 
 #[unsafe(no_mangle)]
 #[allow(unused_variables)]
-unsafe extern "system" fn scs_telemetry_init(version: i32, params: *const scs_telemetry_init_params_v100_t) -> i32 {
-
+unsafe extern "system" fn scs_telemetry_init(
+    version: i32,
+    params: *const scs_telemetry_init_params_v100_t,
+) -> i32 {
     let init_params = unsafe { &(*params).common };
 
     log::set_logger(Box::leak(Box::new(ScsLogger {
-        logger: init_params.logger
-    }))).map(|()| log::set_max_level(LevelFilter::Info)).unwrap();
+        logger: init_params.logger,
+    })))
+    .map(|()| log::set_max_level(LevelFilter::Info))
+    .unwrap();
 
     info!("Plugin Loaded!");
 
@@ -102,7 +119,7 @@ unsafe extern "system" fn scs_telemetry_init(version: i32, params: *const scs_te
     let handle = std::thread::spawn(move || {
         // create tokio runtime and notify main thread
         let rt = Builder::new_multi_thread().enable_all().build().unwrap();
-    
+
         info!("Initialized Tokio Runtime");
         rt.block_on(plugin_main(params));
     });
@@ -110,44 +127,68 @@ unsafe extern "system" fn scs_telemetry_init(version: i32, params: *const scs_te
 }
 
 async fn plugin_main(params: ScsSdkInitParamsV100) {
-    let live_streams_path = if let Some(home_dir) = std::env::home_dir() {
-        let documents = home_dir.join("Documents"); // TODO: use Windows API [Environment]::GetFolderPath('Personal')
-        let game_name = if params.game_id == "eut2" { "Euro Truck Simulator 2" } else if params.game_id == "ats" { "American Truck Simulator" } else { &params.game_name };
-        let game_dir = documents.join(game_name);
+    let game_name = if params.game_id == "eut2" {
+        "Euro Truck Simulator 2"
+    } else if params.game_id == "ats" {
+        "American Truck Simulator"
+    } else {
+        &params.game_name
+    };
+
+    let game_dir = if let Some(game_dir) = yunting_lib::get_app_folder(game_name) {
         if !game_dir.is_dir() {
             log::warn!("Game directory does not exist: {:?}", game_dir);
             return;
         }
-        game_dir.join("live_streams.sii")
+        game_dir
     } else {
         log::warn!("Could not determine home directory");
         return;
     };
 
-    let provinces = list_all_provinces().await;
-    if provinces.is_err() {
-        log::error!("Failed to list provinces: {:?}", provinces.err());
-        return;
-    }
-    let provinces = provinces.unwrap();
-    if provinces.data.is_none() {
-        log::error!("No province data received: {:?}", provinces);
-        return;
-    }
+    let live_streams_path = game_dir.join("live_streams.sii");
+
+    let provinces = if let Ok(config) = yunting_lib::config::load_config(&game_dir) {
+        config.provinces
+    } else {
+        let provinces = list_all_provinces().await;
+        if provinces.is_err() {
+            log::error!("Failed to list provinces: {:?}", provinces.err());
+            return;
+        }
+        let provinces = provinces.unwrap();
+        if provinces.data.is_none() {
+            log::error!("No province data received: {:?}", provinces);
+            return;
+        }
+        let province_codes = provinces
+            .data
+            .unwrap()
+            .into_iter()
+            .map(|p| p.province_code)
+            .collect::<Vec<_>>();
+        if let Err(e) = yunting_lib::config::save_config(&game_dir, province_codes.clone()) {
+            log::error!("Failed to save config: {:?}", e);
+        }
+        province_codes
+    };
 
     let mut radio_list = vec![];
 
-    for p in provinces.data.unwrap() {
-        let province_radio = get_radio_list(p.province_code).await;
+    for p in provinces {
+        let province_radio = get_radio_list(p).await;
         if province_radio.is_err() {
-            log::error!("Failed to get radio list for province {}: {:?}", p.province_code, province_radio.err());
+            log::error!(
+                "Failed to get radio list for province {}: {:?}",
+                p,
+                province_radio.err()
+            );
             continue;
         }
         let province_radio = province_radio.unwrap();
         radio_list.push(province_radio.data);
     }
 
-    
     let radio_list = radio_list
         .into_iter()
         .flatten()
@@ -166,11 +207,12 @@ async fn plugin_main(params: ScsSdkInitParamsV100) {
         .unwrap();
     file.flush().await.unwrap();
 
-    info!("Wrote live streams to {:?} with {} entries", live_streams_path, radio_list.len());
-
+    info!(
+        "Wrote live streams to {:?} with {} entries",
+        live_streams_path,
+        radio_list.len()
+    );
 }
 
 #[unsafe(no_mangle)]
-unsafe extern "system" fn scs_telemetry_shutdown() {
-
-}
+unsafe extern "system" fn scs_telemetry_shutdown() {}

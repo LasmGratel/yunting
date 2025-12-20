@@ -1,13 +1,23 @@
 use std::time::SystemTime;
 
-use crate::model::{ProvinceResponse, RadioInfo, RadioListResponse};
 use crate::error::RequestError;
+use crate::model::{ProvinceResponse, RadioInfo, RadioListResponse};
 
 const KEY: &str = "f0fc4c668392f9f9a447e48584c214ee";
 
+pub mod config;
 mod crypto;
-mod model;
 mod error;
+mod model;
+mod windows_util;
+
+pub fn get_app_folder(game_name: &str) -> Option<std::path::PathBuf> {
+    let my_documents = windows_util::SpecialFolder::MyDocuments
+        .get()
+        .or_else(|| std::env::home_dir().map(|p| p.join("Documents")))?;
+
+    Some(my_documents.join(game_name))
+}
 
 pub(crate) fn get_current_unix_epoch() -> u128 {
     SystemTime::now()
@@ -18,7 +28,11 @@ pub(crate) fn get_current_unix_epoch() -> u128 {
 
 pub fn format_live_streams(radios: &[RadioInfo]) -> String {
     // TODO: handle m3u8 streams
-    let radios = radios.iter().filter(|radio| !radio.mp3_play_url_high.contains("m3u8")).collect::<Vec<_>>();
+    let radios = radios
+        .iter()
+        .filter(|radio| !radio.mp3_play_url_high.contains("m3u8"))
+        .filter(|radio| !radio.mp3_play_url_high.is_empty())
+        .collect::<Vec<_>>();
     let mut s = r#"SiiNunit
 {
 live_stream_def : _nameless.204.d25f.7590 {
@@ -27,7 +41,6 @@ live_stream_def : _nameless.204.d25f.7590 {
     s.push_str(&radios.len().to_string());
     s.push('\n');
     for (i, radio) in radios.iter().enumerate() {
-        
         s.push_str(&format!(
             " stream_data[{}]: \"{}|{}|Radio|ZHO|192|0\"\n",
             i, radio.mp3_play_url_high, radio.title
